@@ -62,6 +62,7 @@ public class InstagramScrapPhotoLinkServiceImpl implements InstagramScrapPhotoLi
 					WebElement img = driver.findElement(By.xpath("//div[@class='_aagv']//img"));
 					mediaUrls.add(img.getAttribute("src"));
 				} catch (NoSuchElementException ignored) {
+					throw ignored;
 				}
 				// NAVIGATION: Click 'Next'
 				try {

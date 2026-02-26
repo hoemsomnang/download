@@ -3,7 +3,6 @@ package com.ig.download.instagram.controller.v1;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -40,7 +39,21 @@ public class InstagramDownloadControllerV1 {
 		try {
 			String profileName = "long_long";
 			String url = "https://www.instagram.com/long_manin/reel/DUp15C1CDrR/";
-			//instagramDownloadFileService.downloadReel(url, profileName);
+			ChromeOptions options = new ChromeOptions();
+			options.addArguments("--headless=new");
+			options.addArguments("--disable-gpu");
+			options.addArguments("--no-sandbox");
+			options.addArguments("--disable-dev-shm-usage");
+			options.addArguments("--window-size=1920,1080");
+			options.addArguments("--disable-blink-features=AutomationControlled");
+
+			ChromeDriver driver = new ChromeDriver(options);
+			DevTools devTools = ((ChromeDriver) driver).getDevTools();
+			devTools.createSession();
+			devTools.send(Network.enable(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty()));
+			
+			instagramDownloadFileService.downloadReel(url, profileName, devTools, driver );
+			
 		} catch (Exception e) {
 			throw e;
 		}
@@ -50,13 +63,9 @@ public class InstagramDownloadControllerV1 {
 	@PostMapping("/photos")
 	public void downloadPhotos( @RequestBody Map<String, Object> body ) throws Exception {
 		try {
-			
 			String profileName = "long_long";
-			String targetURL = "https://www.instagram.com/long_manin/p/DUnWmuOE48i/";
-			List<Map<String, Object>> photos =  instagramScrapPhotoLinkService.scrapPhotos(targetURL);
-			for ( Map<String, Object> photo : photos ) {
-				instagramDownloadFileService.downloadPhotos(photo.get("uRL").toString(), photo.get("caption").toString() , profileName);
-			}
+			String targetURL = "https://www.instagram.com/__blue_lemon/p/DUN3RbaE_c2/";
+			instagramDownloadFileService.downloadPhotos(targetURL , profileName);
 			
 		} catch (Exception e) {
 			throw e;
@@ -68,7 +77,7 @@ public class InstagramDownloadControllerV1 {
 	public void downloadProfile( @RequestBody Map<String, Object> body ) throws Exception {
 		try {
 			
-			String profileName = "b_girl_superlina";
+			String profileName = "long_manin";
 			
 			Set<String> urls = instagramProfileScaperService.scrapProfile(profileName);
 			
@@ -88,14 +97,13 @@ public class InstagramDownloadControllerV1 {
 			// Create directory follow profile Name
 			Path directory = Paths.get(profileName,"VDO");
 			Files.createDirectories(directory); // safe even if exists
+			directory = Paths.get(profileName, "photos");
+			Files.createDirectories(directory);
 			for ( String url : urls ) {
 				if ( url.contains("reel")) {
 					instagramDownloadFileService.downloadReel(url, profileName, devTools, driver );
 				} else {
-					List<Map<String, Object>> photos =  instagramScrapPhotoLinkService.scrapPhotos(url);
-					for ( Map<String, Object> photo : photos ) {
-						instagramDownloadFileService.downloadPhotos(photo.get("uRL").toString(), photo.get("caption").toString() , profileName);
-					}
+					instagramDownloadFileService.downloadPhotos(url , profileName);
 				}
 			}
 			

@@ -12,8 +12,10 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -21,14 +23,18 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.apache.commons.lang3.StringUtils;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.openqa.selenium.By;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
 import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.devtools.DevTools;
 import org.openqa.selenium.devtools.v144.network.Network;
 import org.openqa.selenium.devtools.v144.network.model.Response;
@@ -36,23 +42,101 @@ import org.springframework.stereotype.Service;
 
 import com.ig.download.instagram.constant.ExtensionConstant;
 import com.ig.download.instagram.service.v1.InstagramDownloadFileService;
+import com.ig.download.instagram.util.DateUtils;
+
+import io.github.bonigarcia.wdm.WebDriverManager;
 
 @Service
 public class InstagramDownloadFileServiceImpl implements InstagramDownloadFileService {
 
 		
 	@Override
-	public void downloadPhotos(String imageUrl, String caption, String profileName ) throws Exception {
+	public void downloadPhotos(String targetUrl, String profileName ) throws Exception {
 		try {
-			caption = safeCaption(caption);
-			Path savePath = buildPath(profileName, caption, ExtensionConstant.JPG);
-			downloadImage(imageUrl, savePath);
-			System.out.println("Image downloaded successfully to: " + savePath.toAbsolutePath());
+			scrapLinkPhoto(targetUrl, profileName );
 		} catch (Exception e) {
 			System.err.println("Failed to download image: " + e.getMessage());
 		}
 	}
 
+	/**
+	 * @param targetUrl
+	 * @param profileName
+	 * @throws Exception
+	 */
+	private void scrapLinkPhoto( String targetUrl, String profileName ) throws Exception {
+		
+		Map<String, String> mobileEmulation = new HashMap<>();
+		mobileEmulation.put("deviceName", "iPhone 12 Pro");
+		ChromeOptions options = new ChromeOptions();
+		options.addArguments("--headless");
+		options.addArguments("--disable-gpu");
+		options.addArguments("--no-sandbox");
+		options.setExperimentalOption("mobileEmulation", mobileEmulation);
+		options.addArguments("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+		WebDriverManager.chromedriver().setup();
+		WebDriver driver = new ChromeDriver(options);
+		try {
+			driver.get( targetUrl );
+			Set<String> imageUrls = new LinkedHashSet<>();
+			String caption = getCaptionPhoto(driver);
+			boolean isNext = true;
+			while ( isNext ) {
+				WebElement element = driver.findElement(By.tagName("div"));
+				// Get all the elements available with tag name '_aagv'
+				List<WebElement> imageEls = element.findElements(By.className("_aagv"));
+				for (WebElement e : imageEls) {
+					WebElement img = e.findElement(By.tagName("img"));
+					imageUrls.add(img.getAttribute("src"));
+				}
+				// Use findElements to avoid NoSuchElementException
+				try {
+					WebElement nextButtons = driver.findElement(By.cssSelector("button[aria-label='Next']"));
+					((JavascriptExecutor) driver).executeScript("arguments[0].click();", nextButtons);
+				} catch ( Exception e) {
+					isNext = false;
+				}
+			}
+			int index = 1;
+			for (String url : imageUrls) {
+				// PROCESS DOWNLOAD IMAGE 
+				caption = safeCaption(caption);
+				downloadImage(profileName, String.format("%s-(%s)", caption, index), url);
+				index++;
+			}
+			imageUrls.stream().forEach(System.out::println); 
+		} finally {
+			driver.quit();
+		}
+	}
+	
+	/**
+	 * @param driver
+	 * @return
+	 */
+	private static String getCaptionPhoto( WebDriver driver ) {
+		String caption = "";
+		WebElement article = driver.findElement(By.tagName("article"));
+		List<WebElement> spans= article.findElements(By.className("_ap3a"));
+		for ( WebElement span: spans ) {
+			try {
+				WebElement div = span.findElement(By.tagName("div"));
+				WebElement h1 = div.findElement(By.tagName("h1"));
+				caption = h1.getText();
+			} catch (Exception e) {
+			}
+		}
+		
+		if ( caption.isBlank() ) {
+			caption = DateUtils.getCurrentFormatDate(DateUtils.FORMAT_FULL_DATETIME);
+		}
+		
+		return caption;
+	}
+	/**
+	 * @param caption
+	 * @return
+	 */
 	public static String safeCaption(String caption) {
 	    if (caption == null || caption.isBlank())
 	        return "video_" + System.currentTimeMillis();
@@ -108,15 +192,16 @@ public class InstagramDownloadFileServiceImpl implements InstagramDownloadFileSe
 	 * @param savePath
 	 * @throws IOException
 	 */
-	public void downloadImage(String imageUrl, Path savePath) throws IOException {
+	public void downloadImage(String profileName, String caption, String imageUrl) throws IOException {
 
+		Path finalPath = Paths.get(profileName, "photos", caption + ExtensionConstant.JPG);
 		URL url = new URL(imageUrl);
 		HttpURLConnection connection = (HttpURLConnection) url.openConnection();
 		connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
 		connection.setConnectTimeout(10000);
 		connection.setReadTimeout(10000);
 		connection.connect();
-		try (InputStream in = connection.getInputStream(); OutputStream out = Files.newOutputStream(savePath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+		try (InputStream in = connection.getInputStream(); OutputStream out = Files.newOutputStream(finalPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
 			byte[] buffer = new byte[8192];
 			int bytesRead;
 			while ((bytesRead = in.read(buffer)) != -1) {
@@ -134,19 +219,6 @@ public class InstagramDownloadFileServiceImpl implements InstagramDownloadFileSe
 	@Override
 	public void downloadReel(String url, String profileName, DevTools devTools, ChromeDriver driver ) throws Exception {
 		try {
-			
-			/*ChromeOptions options = new ChromeOptions();
-			options.addArguments("--headless=new");
-			options.addArguments("--disable-gpu");
-			options.addArguments("--no-sandbox");
-			options.addArguments("--disable-dev-shm-usage");
-			options.addArguments("--window-size=1920,1080");
-			options.addArguments("--disable-blink-features=AutomationControlled");
-
-			ChromeDriver driver = new ChromeDriver(options);
-			DevTools devTools = ((ChromeDriver) driver).getDevTools();
-			devTools.createSession();
-			devTools.send(Network.enable(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty()));*/
 
 			// Prepare wait mechanism to avoid Thread.sleep
 			CountDownLatch latch = new CountDownLatch(1);
@@ -199,8 +271,9 @@ public class InstagramDownloadFileServiceImpl implements InstagramDownloadFileSe
 			}
 			processDashJson(reps, driver, profileName);
 		} catch( Exception e ) {
-			throw e;
-		}
+			e.printStackTrace();
+			System.out.println("cannot download error" + e.getMessage() );
+		} 
 
 	}
 	
@@ -208,9 +281,9 @@ public class InstagramDownloadFileServiceImpl implements InstagramDownloadFileSe
 	 * @param driver
 	 * @return
 	 */
-	public String getCaption(WebDriver driver) {
+	public String getCaptionVDO(WebDriver driver) {
 
-        JavascriptExecutor js = (JavascriptExecutor) driver;
+		JavascriptExecutor js = (JavascriptExecutor) driver;
 
         String caption = (String) js.executeScript("""
             function extractCaption() {
@@ -244,8 +317,8 @@ public class InstagramDownloadFileServiceImpl implements InstagramDownloadFileSe
             }
             return extractCaption();
         """);
-
         return caption == null ? "No caption found" : caption.trim();
+
 	}
 	
 	/**
@@ -345,7 +418,7 @@ public class InstagramDownloadFileServiceImpl implements InstagramDownloadFileSe
 			}
 
 			if (bestVideoUrl != null && bestAudioUrl != null) {
-				String caption = safeCaption(getCaption(driver));
+				String caption = safeCaption(getCaptionVDO(driver));
 				Path finalPath = Paths.get(profileName, "VDO", caption + ExtensionConstant.MP4);
 				Map<String, String> ffHeaders = buildCdnHeaders(driver);
 				mergeFromUrls(bestVideoUrl, bestAudioUrl, finalPath, ffHeaders);
